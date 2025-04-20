@@ -11,6 +11,8 @@ use rand::Rng;
 use log::{info, error, warn};
 
 pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client: WeatherClient) {
+    info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждый час");
+    
     loop {
         let now = Local::now();
         let now_time = now.format("%H:%M").to_string();
@@ -69,8 +71,9 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
             }
         }
         
-        // Ждем минуту перед следующей проверкой
-        sleep(Duration::from_secs(60)).await;
+        // Ждем час перед следующей проверкой
+        info!("Следующая проверка расписания через 1 час");
+        sleep(Duration::from_secs(3600)).await;
     }
 }
 
