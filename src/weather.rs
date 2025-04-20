@@ -1,7 +1,8 @@
 use reqwest::Client;
 use serde::Deserialize;
-use chrono::{Utc, TimeZone, Timelike};
+use chrono::{Utc, TimeZone, Timelike, Datelike};
 use log::error;
+use std::collections::HashMap;
 
 const OPENWEATHER_URL: &str = "https://api.openweathermap.org/data/2.5/weather";
 const FORECAST_URL: &str = "https://api.openweathermap.org/data/2.5/forecast";
@@ -62,6 +63,8 @@ struct ForecastResponse {
 struct ForecastItem {
     dt: i64,
     main: MainInfo,
+    weather: Vec<WeatherInfo>,
+    dt_txt: String,
 }
 
 #[derive(Clone)]
@@ -133,6 +136,51 @@ impl WeatherClient {
                 ("units", "metric"),
                 ("lang", "ru"),
                 ("cnt", "24"), // получаем прогноз на 24 часа (с интервалом 3 часа)
+            ])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!("Ошибка сетевого запроса прогноза: {}", e);
+                return Err(format!("Не удалось получить данные о прогнозе: {}", e));
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = match response.text().await {
+                Ok(text) => text,
+                Err(_) => "неизвестная ошибка".to_string(),
+            };
+            
+            error!("Сервис прогноза вернул ошибку: {} - {}", status, error_text);
+            return Err(format!("Сервис прогноза недоступен ({})", status));
+        }
+
+        match response.json::<ForecastResponse>().await {
+            Ok(forecast_data) => Ok(forecast_data),
+            Err(e) => {
+                error!("Ошибка парсинга ответа прогноза: {}", e);
+                Err(format!("Не удалось обработать данные о прогнозе: {}", e))
+            }
+        }
+    }
+
+    pub async fn get_weekly_forecast(&self, city: &str) -> Result<String, String> {
+        let forecast = self.fetch_forecast_extended(city).await?;
+        Ok(self.format_weekly_forecast(&forecast))
+    }
+
+    async fn fetch_forecast_extended(&self, city: &str) -> Result<ForecastResponse, String> {
+        let response = match self.client
+            .get(FORECAST_URL)
+            .query(&[
+                ("q", city),
+                ("appid", &self.api_key),
+                ("units", "metric"),
+                ("lang", "ru"),
+                ("cnt", "40"), // получаем прогноз на 5 дней с 3-часовым интервалом (максимум 40)
             ])
             .send()
             .await
@@ -315,5 +363,84 @@ impl WeatherClient {
             None => String::new(),
             Some(first) => first.to_uppercase().chain(chars).collect(),
         }
+    }
+
+    fn format_weekly_forecast(&self, forecast: &ForecastResponse) -> String {
+        if forecast.list.is_empty() {
+            return "Нет данных о прогнозе".to_string();
+        }
+
+        // Группируем прогноз по дням
+        let mut days_forecast: HashMap<String, (String, Vec<&ForecastItem>)> = HashMap::new();
+        
+        for item in &forecast.list {
+            // Используем формат даты из dt_txt: "2023-11-21 15:00:00"
+            // Получаем только дату (первые 10 символов)
+            let date_str = if item.dt_txt.len() >= 10 {
+                item.dt_txt[0..10].to_string()
+            } else {
+                // Запасной вариант, если dt_txt имеет неожиданный формат
+                let date = Utc.timestamp_opt(item.dt, 0).unwrap();
+                date.format("%Y-%m-%d").to_string()
+            };
+            
+            // Определяем день недели
+            let date = Utc.timestamp_opt(item.dt, 0).unwrap();
+            let day_name = match date.weekday() {
+                chrono::Weekday::Mon => "Понедельник",
+                chrono::Weekday::Tue => "Вторник",
+                chrono::Weekday::Wed => "Среда",
+                chrono::Weekday::Thu => "Четверг",
+                chrono::Weekday::Fri => "Пятница",
+                chrono::Weekday::Sat => "Суббота",
+                chrono::Weekday::Sun => "Воскресенье",
+            };
+            
+            // Добавляем прогноз в соответствующий день
+            days_forecast.entry(date_str)
+                .or_insert_with(|| (day_name.to_string(), Vec::new()))
+                .1.push(item);
+        }
+
+        // Форматируем прогноз для каждого дня
+        let mut result = String::new();
+        
+        // Сортируем дни
+        let mut days: Vec<(String, (String, Vec<&ForecastItem>))> = days_forecast.into_iter().collect();
+        days.sort_by(|a, b| a.0.cmp(&b.0));
+        
+        for (date, (day_name, forecasts)) in days {
+            // Обрабатываем данные для дня
+            let mut min_temp = f32::MAX;
+            let mut max_temp = f32::MIN;
+            let mut descriptions = Vec::new();
+            
+            for item in &forecasts {
+                min_temp = min_temp.min(item.main.temp_min);
+                max_temp = max_temp.max(item.main.temp_max);
+                
+                if let Some(weather_info) = item.weather.first() {
+                    descriptions.push(self.capitalize_first_letter(&weather_info.description));
+                }
+            }
+            
+            // Убираем дубликаты в описаниях
+            descriptions.sort();
+            descriptions.dedup();
+            
+            // Добавляем прогноз для дня - форматируем дату как день.месяц
+            let date_parts: Vec<&str> = date.split('-').collect();
+            let formatted_date = if date_parts.len() >= 3 {
+                format!("{}.{}", date_parts[2], date_parts[1]) // день.месяц
+            } else {
+                date.clone() // в случае ошибки берем исходную строку
+            };
+            
+            result.push_str(&format!("*{}, {}*:\n", day_name, formatted_date));
+            result.push_str(&format!("🌡 Температура: {:.1}°C — {:.1}°C\n", min_temp, max_temp));
+            result.push_str(&format!("🌤 Погода: {}\n\n", descriptions.join(", ")));
+        }
+        
+        result
     }
 }

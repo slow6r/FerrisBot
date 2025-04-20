@@ -2,7 +2,7 @@ use teloxide::types::ChatId;
 use teloxide::Bot;
 use super::storage::JsonStorage;
 use super::weather::WeatherClient;
-use chrono::{Local, Datelike, Weekday};
+use chrono::{Local, Datelike, Weekday, DateTime, Timelike, Utc};
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;
 use teloxide::payloads::SendMessageSetters;
@@ -26,7 +26,7 @@ fn escape_markdown_v2(text: &str) -> String {
 }
 
 pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client: WeatherClient) {
-    info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждый час");
+    info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждую минуту");
     
     loop {
         let now = Local::now();
@@ -40,7 +40,11 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
         info!("Всего пользователей в базе: {}", users.len());
 
         // Проверяем, не настало ли время для массовой рассылки (12:00 или 18:00)
-        let is_mass_notification_time = now_time == "12:00" || now_time == "18:00";
+        let hours = now.hour();
+        let minutes = now.minute();
+        let is_mass_notification_time = (hours == 12 || hours == 18) && minutes == 0;
+        
+        info!("Текущее время: {}, массовая рассылка: {}", now_time, is_mass_notification_time);
         
         if is_mass_notification_time {
             info!("Время массовой рассылки [{}]. Отправляем уведомления всем пользователям.", now_time);
@@ -99,9 +103,9 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
             }
         }
         
-        // Ждем час перед следующей проверкой
-        info!("Следующая проверка расписания через 1 час");
-        sleep(Duration::from_secs(3600)).await;
+        // Ждем минуту перед следующей проверкой
+        info!("Следующая проверка расписания через 1 минуту");
+        sleep(Duration::from_secs(60)).await;
     }
 }
 

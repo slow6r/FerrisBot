@@ -22,6 +22,8 @@ enum Command {
     Time(String),
     #[command(description = "узнать текущую погоду")]
     Weather,
+    #[command(description = "прогноз погоды на неделю")]
+    Forecast,
 }
 
 // Вспомогательная функция для экранирования специальных символов Markdown
@@ -74,6 +76,7 @@ async fn main() {
         BotCommand::new("city", "установить город (например, /city Москва)"),
         BotCommand::new("time", "установить время уведомлений (например, /time 08:00)"),
         BotCommand::new("weather", "узнать текущую погоду"),
+        BotCommand::new("forecast", "прогноз погоды на неделю"),
     ];
     
     // Устанавливаем команды для всех чатов
@@ -140,6 +143,7 @@ async fn handle_commands(
         Command::City(city) => info!("Пользователь @{} устанавливает город: {}", username, city),
         Command::Time(time) => info!("Пользователь @{} устанавливает время уведомлений: {}", username, time),
         Command::Weather => info!("Пользователь @{} запрашивает погоду", username),
+        Command::Forecast => info!("Пользователь @{} запрашивает прогноз на неделю", username),
     }
     
     match cmd {
@@ -157,6 +161,9 @@ async fn handle_commands(
         }
         Command::Weather => {
             send_current_weather(&bot, &msg, &storage, &weather_client).await?;
+        }
+        Command::Forecast => {
+            send_weekly_forecast(&bot, &msg, &storage, &weather_client).await?;
         }
     }
     Ok(())
@@ -192,6 +199,7 @@ async fn send_start_message(bot: &Bot, msg: &Message) -> ResponseResult<()> {
                 /city \\[город\\] \\- установить твой город \\(например: /city Москва\\)\n\
                 /time \\[HH:MM\\] \\- установить время ежедневных уведомлений \\(например: /time 08:00\\)\n\
                 /weather \\- получить текущий прогноз погоды\n\
+                /forecast \\- получить прогноз погоды на неделю\n\
                 /help \\- показать список всех команд\n\n\
                 Пожалуйста, начни с установки города командой /city 💖";
 
@@ -207,7 +215,8 @@ async fn send_help(bot: &Bot, msg: &Message) -> ResponseResult<()> {
                      /help \\- показать это сообщение\n\
                      /city \\[название\\] \\- установить город \\(например: /city Москва\\)\n\
                      /time \\[ЧЧ:ММ\\] \\- установить время уведомлений \\(например: /time 08:00\\)\n\
-                     /weather \\- узнать текущую погоду";
+                     /weather \\- узнать текущую погоду\n\
+                     /forecast \\- получить прогноз погоды на неделю";
 
     bot.send_message(msg.chat.id, help_text)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
@@ -352,6 +361,76 @@ async fn send_current_weather(
         }
         None => {
             info!("Пользователь @{} запросил погоду без настройки профиля", username);
+            bot.send_message(
+                msg.chat.id, 
+                "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city \\[город\\]\\."
+            )
+            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+            .await?;
+        }
+    }
+    
+    Ok(())
+}
+
+async fn send_weekly_forecast(
+    bot: &Bot, 
+    msg: &Message, 
+    storage: &JsonStorage, 
+    weather_client: &weather::WeatherClient
+) -> ResponseResult<()> {
+    let user_id = msg.chat.id.0;
+    let username = msg.from()
+        .and_then(|user| user.username.clone())
+        .unwrap_or_else(|| format!("ID: {}", user_id));
+    
+    // Получаем настройки пользователя
+    let user = storage.get_user(user_id).await;
+    
+    match user {
+        Some(user) => {
+            match &user.city {
+                Some(city) => {
+                    bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await?;
+                    
+                    info!("Запрашиваю прогноз на неделю для пользователя @{}, город: {}", username, city);
+                    
+                    match weather_client.get_weekly_forecast(city).await {
+                        Ok(forecast) => {
+                            info!("Успешно получен прогноз на неделю для пользователя @{}", username);
+                            
+                            // Экранируем специальные символы для MarkdownV2
+                            let city_escaped = escape_markdown_v2(city);
+                            let forecast_escaped = escape_markdown_v2(&forecast);
+                            
+                            bot.send_message(msg.chat.id, format!("🗓 *Прогноз погоды на неделю в {}*\n\n{}", city_escaped, forecast_escaped))
+                                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                                .await?;
+                        }
+                        Err(e) => {
+                            error!("Ошибка получения прогноза на неделю для пользователя @{}: {}", username, e);
+                            bot.send_message(
+                                msg.chat.id, 
+                                format!("❌ *Не удалось получить прогноз:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
+                            )
+                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                            .await?;
+                        }
+                    }
+                }
+                None => {
+                    info!("Пользователь @{} запросил прогноз на неделю без установленного города", username);
+                    bot.send_message(
+                        msg.chat.id, 
+                        "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city \\[город\\], чтобы я мог показать тебе прогноз погоды\\."
+                    )
+                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                    .await?;
+                }
+            }
+        }
+        None => {
+            info!("Пользователь @{} запросил прогноз на неделю без настройки профиля", username);
             bot.send_message(
                 msg.chat.id, 
                 "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city \\[город\\]\\."
