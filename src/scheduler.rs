@@ -10,6 +10,21 @@ use teloxide::prelude::Requester;
 use rand::Rng;
 use log::{info, error, warn};
 
+// Вспомогательная функция для экранирования специальных символов Markdown
+fn escape_markdown_v2(text: &str) -> String {
+    let special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+    let mut result = String::with_capacity(text.len() * 2); // Предварительное выделение памяти
+    
+    for ch in text.chars() {
+        if special_chars.contains(&ch) {
+            result.push('\\');
+        }
+        result.push(ch);
+    }
+    
+    result
+}
+
 pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client: WeatherClient) {
     info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждый час");
     
@@ -47,9 +62,13 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                 let cute_message = get_cute_message();
                                 let good_day_wish = get_good_day_wish();
                                 
-                                // Формируем полное сообщение
+                                // Формируем полное сообщение с экранированием
                                 let message = format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}\n\n{}", 
-                                    greeting, city, weather_text, cute_message, good_day_wish);
+                                    escape_markdown_v2(&greeting), 
+                                    escape_markdown_v2(city), 
+                                    escape_markdown_v2(&weather_text), 
+                                    escape_markdown_v2(&cute_message), 
+                                    escape_markdown_v2(&good_day_wish));
                                 
                                 // Отправляем сообщение
                                 if let Err(e) = bot.send_message(ChatId(user.user_id), message)
@@ -67,8 +86,8 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                 // Отправляем уведомление об ошибке
                                 if let Err(e) = bot.send_message(
                                     ChatId(user.user_id),
-                                    format!("Доброе утро! К сожалению, не удалось получить данные о погоде: {}", e)
-                                ).await {
+                                    format!("Доброе утро\\! К сожалению, не удалось получить данные о погоде: {}", escape_markdown_v2(&e.to_string()))
+                                ).parse_mode(teloxide::types::ParseMode::MarkdownV2).await {
                                     error!("Не удалось отправить уведомление об ошибке пользователю {}: {}", user.user_id, e);
                                 }
                             }
@@ -161,9 +180,12 @@ async fn send_mass_notifications(
                     // Получаем милое сообщение
                     let cute_message = get_cute_message();
                     
-                    // Формируем полное сообщение
+                    // Формируем полное сообщение с экранированием
                     let message = format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}", 
-                        greeting, city, weather_text, cute_message);
+                        escape_markdown_v2(&greeting), 
+                        escape_markdown_v2(city), 
+                        escape_markdown_v2(&weather_text), 
+                        escape_markdown_v2(&cute_message));
                     
                     // Отправляем сообщение
                     if let Err(e) = bot.send_message(ChatId(user.user_id), message)
