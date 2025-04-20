@@ -53,7 +53,7 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                 
                                 // Отправляем сообщение
                                 if let Err(e) = bot.send_message(ChatId(user.user_id), message)
-                                    .parse_mode(teloxide::types::ParseMode::Markdown)
+                                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                                     .await 
                                 {
                                     error!("Не удалось отправить уведомление пользователю {}: {}", user.user_id, e);
@@ -167,7 +167,7 @@ async fn send_mass_notifications(
                     
                     // Отправляем сообщение
                     if let Err(e) = bot.send_message(ChatId(user.user_id), message)
-                        .parse_mode(teloxide::types::ParseMode::Markdown)
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                         .await 
                     {
                         error!("Не удалось отправить массовое уведомление пользователю {}: {}", user.user_id, e);

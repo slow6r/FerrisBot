@@ -47,12 +47,12 @@ async fn main() {
     let bot = Bot::new(bot_token);
     let weather_client = weather::WeatherClient::new(weather_api_key.clone());
     
-    // Устанавливаем команды в меню бота
+    // Принудительно устанавливаем команды в меню бота и проверяем результат
     info!("Настраиваю командную панель бота...");
-    
+
     // Создаем список команд вручную для гарантированной поддержки
-    use teloxide::types::{BotCommand, BotCommandScope};
-    
+    use teloxide::types::BotCommand;
+
     let commands = vec![
         BotCommand::new("start", "начать работу с ботом"),
         BotCommand::new("help", "показать список команд"),
@@ -181,7 +181,7 @@ async fn send_start_message(bot: &Bot, msg: &Message) -> ResponseResult<()> {
                 Пожалуйста, начни с установки города командой /city 💖";
 
     bot.send_message(msg.chat.id, text)
-        .parse_mode(teloxide::types::ParseMode::Markdown)
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
         .await?;
     Ok(())
 }
@@ -195,7 +195,7 @@ async fn send_help(bot: &Bot, msg: &Message) -> ResponseResult<()> {
                      /weather - узнать текущую погоду";
 
     bot.send_message(msg.chat.id, help_text)
-        .parse_mode(teloxide::types::ParseMode::Markdown)
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
         .await?;
     Ok(())
 }
@@ -231,7 +231,7 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
         msg.chat.id, 
         format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time [HH:MM]", city_arg.trim())
     )
-    .parse_mode(teloxide::types::ParseMode::Markdown)
+    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
     .await?;
     
     Ok(())
@@ -278,7 +278,7 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
         msg.chat.id, 
         format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение! 💖", time_arg.trim())
     )
-    .parse_mode(teloxide::types::ParseMode::Markdown)
+    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
     .await?;
     
     Ok(())
@@ -310,7 +310,7 @@ async fn send_current_weather(
                         Ok(weather) => {
                             info!("Успешно получена погода для пользователя @{}", username);
                             bot.send_message(msg.chat.id, format!("🌦️ *Погода в {}*\n\n{}", city, weather))
-                                .parse_mode(teloxide::types::ParseMode::Markdown)
+                                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                                 .await?;
                         }
                         Err(e) => {
@@ -319,7 +319,7 @@ async fn send_current_weather(
                                 msg.chat.id, 
                                 format!("❌ *Не удалось получить погоду:*\n{}\n\nПроверь правильность названия города или попробуй позже.", e)
                             )
-                            .parse_mode(teloxide::types::ParseMode::Markdown)
+                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                             .await?;
                         }
                     }
@@ -330,7 +330,7 @@ async fn send_current_weather(
                         msg.chat.id, 
                         "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city [город], чтобы я мог показать тебе прогноз погоды."
                     )
-                    .parse_mode(teloxide::types::ParseMode::Markdown)
+                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                     .await?;
                 }
             }
@@ -341,7 +341,7 @@ async fn send_current_weather(
                 msg.chat.id, 
                 "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city [город]."
             )
-            .parse_mode(teloxide::types::ParseMode::Markdown)
+            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
             .await?;
         }
     }

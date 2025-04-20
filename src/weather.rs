@@ -172,12 +172,10 @@ impl WeatherClient {
         let wind_direction = self.get_wind_direction(data.wind.deg);
         
         // Переводим время восхода и заката в удобный формат
-        let dt = Utc.timestamp_opt(data.dt, 0).unwrap();
         let sunrise = Utc.timestamp_opt(data.sys.sunrise, 0).unwrap();
         let sunset = Utc.timestamp_opt(data.sys.sunset, 0).unwrap();
         
         // Форматирование времени
-        let day_time = format!("{:02}:{:02}", dt.hour(), dt.minute());
         let sunrise_time = format!("{:02}:{:02}", sunrise.hour(), sunrise.minute());
         let sunset_time = format!("{:02}:{:02}", sunset.hour(), sunset.minute());
         
