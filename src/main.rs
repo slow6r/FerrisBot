@@ -206,6 +206,53 @@ async fn handle_message(bot: Bot, msg: Message, storage: Arc<JsonStorage>) -> Re
         
         info!("Пользователь @{} отправил сообщение: {}", username, text);
         
+        // Получаем данные пользователя для проверки состояния
+        let user = storage.get_user(user_id).await;
+        
+        // Проверяем состояние пользователя
+        if let Some(user_data) = user {
+            if let Some(state) = &user_data.state {
+                if state == "waiting_for_time" {
+                    // Пользователь в режиме ввода времени
+                    let time_input = text.trim();
+                    
+                    // Проверяем формат введенного времени
+                    if is_valid_time_format(time_input) {
+                        // Время корректное, сохраняем
+                        let mut updated_user = user_data.clone();
+                        updated_user.notification_time = Some(time_input.to_string());
+                        updated_user.state = None; // Сбрасываем состояние ожидания
+                        storage.save_user(updated_user).await;
+                        
+                        let is_cute_mode = user_data.cute_mode;
+                        
+                        // Формируем сообщение об успешной установке времени
+                        let message = if is_cute_mode {
+                            format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", escape_markdown_v2(time_input))
+                        } else {
+                            format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", escape_markdown_v2(time_input))
+                        };
+                        
+                        bot.send_message(msg.chat.id, message)
+                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                            .await?;
+                        
+                        info!("Пользователь @{} успешно установил время уведомлений: {}", username, time_input);
+                        return Ok(());
+                    } else {
+                        // Некорректный формат времени
+                        bot.send_message(
+                            msg.chat.id, 
+                            "⚠️ *Некорректный формат времени*\n\nПожалуйста, введите время в формате ЧЧ:ММ \\(например: 08:30\\)\\.\n\nДопустимое время: от 00:00 до 23:59"
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        
         // Секретный код для активации "милого режима"
         // Используем необычную комбинацию символов, которую сложно угадать случайно
         if text.trim() == "<3cute<3" {
@@ -215,6 +262,7 @@ async fn handle_message(bot: Bot, msg: Message, storage: Arc<JsonStorage>) -> Re
                 city: None,
                 notification_time: None,
                 cute_mode: false,
+                state: None,
             });
             
             // Включаем милый режим
@@ -240,6 +288,7 @@ async fn handle_message(bot: Bot, msg: Message, storage: Arc<JsonStorage>) -> Re
                 city: None,
                 notification_time: None,
                 cute_mode: false,
+                state: None,
             });
             
             // Отключаем милый режим, если он был включен
@@ -277,6 +326,7 @@ async fn send_start_message(bot: &Bot, msg: &Message, storage: &JsonStorage) -> 
         city: None,
         notification_time: None,
         cute_mode: false, // Стандартный режим по умолчанию
+        state: None,
     });
     
     // Принудительно устанавливаем стандартный режим при команде /start
@@ -384,6 +434,7 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
         city: None,
         notification_time: None,
         cute_mode: false, // По умолчанию стандартный режим
+        state: None,
     });
 
     // Сохраняем флаг cute_mode перед сохранением пользователя
@@ -451,6 +502,7 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
         city: None,
         notification_time: None,
         cute_mode: false, // По умолчанию стандартный режим
+        state: None,
     });
 
     // Сохраняем флаг cute_mode перед сохранением пользователя
@@ -489,66 +541,63 @@ async fn send_current_weather(
     // Получаем настройки пользователя
     let user = storage.get_user(user_id).await;
     
-    match user {
-        Some(user) => {
-            match &user.city {
-                Some(city) => {
-                    bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await?;
-                    
-                    info!("Запрашиваю погоду для пользователя @{}, город: {}", username, city);
-                    
-                    match weather_client.get_weather(city).await {
-                        Ok(weather) => {
-                            info!("Успешно получена погода для пользователя @{}", username);
-                            
-                            // Формируем сообщение в зависимости от режима
-                            let message = if user.cute_mode {
-                                // Милый режим
-                                format!("💖 *Специально для тебя, погода в {}*\n\n{}", 
-                                    escape_markdown_v2(city), 
-                                    escape_markdown_v2(&weather))
-                            } else {
-                                // Стандартный режим
-                                format!("🌦️ *Погода в {}*\n\n{}", 
-                                    escape_markdown_v2(city), 
-                                    escape_markdown_v2(&weather))
-                            };
-                            
-                            bot.send_message(msg.chat.id, message)
-                                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-                                .await?;
-                        }
-                        Err(e) => {
-                            error!("Ошибка получения погоды для пользователя @{}: {}", username, e);
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("❌ *Не удалось получить погоду:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
-                            )
+    if let Some(user_data) = user {
+        match &user_data.city {
+            Some(city) => {
+                bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await?;
+                
+                info!("Запрашиваю погоду для пользователя @{}, город: {}", username, city);
+                
+                match weather_client.get_weather(city).await {
+                    Ok(weather) => {
+                        info!("Успешно получена погода для пользователя @{}", username);
+                        
+                        // Формируем сообщение в зависимости от режима
+                        let message = if user_data.cute_mode {
+                            // Милый режим
+                            format!("💖 *Специально для тебя, погода в {}*\n\n{}", 
+                                escape_markdown_v2(city), 
+                                escape_markdown_v2(&weather))
+                        } else {
+                            // Стандартный режим
+                            format!("🌦️ *Погода в {}*\n\n{}", 
+                                escape_markdown_v2(city), 
+                                escape_markdown_v2(&weather))
+                        };
+                        
+                        bot.send_message(msg.chat.id, message)
                             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                             .await?;
-                        }
+                    }
+                    Err(e) => {
+                        error!("Ошибка получения погоды для пользователя @{}: {}", username, e);
+                        bot.send_message(
+                            msg.chat.id, 
+                            format!("❌ *Не удалось получить погоду:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
                     }
                 }
-                None => {
-                    info!("Пользователь @{} запросил погоду без установленного города", username);
-                    bot.send_message(
-                        msg.chat.id, 
-                        "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city \\[город\\], чтобы я мог показать тебе прогноз погоды\\."
-                    )
-                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-                    .await?;
-                }
+            }
+            None => {
+                info!("Пользователь @{} запросил погоду без установленного города", username);
+                bot.send_message(
+                    msg.chat.id, 
+                    "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city, чтобы установить город\\."
+                )
+                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .await?;
             }
         }
-        None => {
-            info!("Пользователь @{} запросил погоду без настройки профиля", username);
-            bot.send_message(
-                msg.chat.id, 
-                "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city \\[город\\]\\."
-            )
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-            .await?;
-        }
+    } else {
+        info!("Пользователь @{} запросил погоду без настройки профиля", username);
+        bot.send_message(
+            msg.chat.id, 
+            "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city\\."
+        )
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .await?;
     }
     
     Ok(())
@@ -568,66 +617,63 @@ async fn send_weekly_forecast(
     // Получаем настройки пользователя
     let user = storage.get_user(user_id).await;
     
-    match user {
-        Some(user) => {
-            match &user.city {
-                Some(city) => {
-                    bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await?;
-                    
-                    info!("Запрашиваю прогноз на неделю для пользователя @{}, город: {}", username, city);
-                    
-                    match weather_client.get_weekly_forecast(city).await {
-                        Ok(forecast) => {
-                            info!("Успешно получен прогноз на неделю для пользователя @{}", username);
-                            
-                            // Экранируем специальные символы для MarkdownV2
-                            let city_escaped = escape_markdown_v2(city);
-                            let forecast_escaped = escape_markdown_v2(&forecast);
-                            
-                            // Формируем сообщение в зависимости от режима
-                            let message = if user.cute_mode {
-                                // Милый режим
-                                format!("✨ *Прогноз погоды на неделю в {}*\n\nСпециально для тебя я подготовил(а) детальный прогноз:\n\n{}", city_escaped, forecast_escaped)
-                            } else {
-                                // Стандартный режим
-                                format!("🗓 *Прогноз погоды на неделю в {}*\n\n{}", city_escaped, forecast_escaped)
-                            };
-                            
-                            bot.send_message(msg.chat.id, message)
-                                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-                                .await?;
-                        }
-                        Err(e) => {
-                            error!("Ошибка получения прогноза на неделю для пользователя @{}: {}", username, e);
-                            bot.send_message(
-                                msg.chat.id, 
-                                format!("❌ *Не удалось получить прогноз:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
-                            )
+    if let Some(user_data) = user {
+        match &user_data.city {
+            Some(city) => {
+                bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await?;
+                
+                info!("Запрашиваю прогноз на неделю для пользователя @{}, город: {}", username, city);
+                
+                match weather_client.get_weekly_forecast(city).await {
+                    Ok(forecast) => {
+                        info!("Успешно получен прогноз на неделю для пользователя @{}", username);
+                        
+                        // Экранируем специальные символы для MarkdownV2
+                        let city_escaped = escape_markdown_v2(city);
+                        let forecast_escaped = escape_markdown_v2(&forecast);
+                        
+                        // Формируем сообщение в зависимости от режима
+                        let message = if user_data.cute_mode {
+                            // Милый режим
+                            format!("✨ *Прогноз погоды на неделю в {}*\n\nСпециально для тебя я подготовил(а) детальный прогноз:\n\n{}", city_escaped, forecast_escaped)
+                        } else {
+                            // Стандартный режим
+                            format!("🗓 *Прогноз погоды на неделю в {}*\n\n{}", city_escaped, forecast_escaped)
+                        };
+                        
+                        bot.send_message(msg.chat.id, message)
                             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                             .await?;
-                        }
+                    }
+                    Err(e) => {
+                        error!("Ошибка получения прогноза на неделю для пользователя @{}: {}", username, e);
+                        bot.send_message(
+                            msg.chat.id, 
+                            format!("❌ *Не удалось получить прогноз:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
                     }
                 }
-                None => {
-                    info!("Пользователь @{} запросил прогноз на неделю без установленного города", username);
-                    bot.send_message(
-                        msg.chat.id, 
-                        "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city \\[город\\], чтобы я мог показать тебе прогноз погоды\\."
-                    )
-                    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-                    .await?;
-                }
+            }
+            None => {
+                info!("Пользователь @{} запросил прогноз на неделю без установленного города", username);
+                bot.send_message(
+                    msg.chat.id, 
+                    "⚠️ *Город не установлен*\n\nПожалуйста, используй команду /city, чтобы установить город\\."
+                )
+                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .await?;
             }
         }
-        None => {
-            info!("Пользователь @{} запросил прогноз на неделю без настройки профиля", username);
-            bot.send_message(
-                msg.chat.id, 
-                "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city \\[город\\]\\."
-            )
-            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
-            .await?;
-        }
+    } else {
+        info!("Пользователь @{} запросил прогноз на неделю без настройки профиля", username);
+        bot.send_message(
+            msg.chat.id, 
+            "⚠️ *Требуется настройка*\n\nПожалуйста, настрой бота с помощью команды /city\\."
+        )
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .await?;
     }
     
     Ok(())
@@ -654,7 +700,19 @@ async fn handle_callback_query(
         
         if let Some(data) = q.data {
             if data.starts_with("city_") {
-                // Обрабатываем выбор города
+                if data == "city_manual" {
+                    // Пользователь выбрал ручной ввод города
+                    bot.answer_callback_query(q.id).await?;
+                    
+                    if let Some(message_id) = q.message.as_ref().map(|msg| msg.id) {
+                        bot.edit_message_text(chat_id, message_id, 
+                            "✏️ Пожалуйста, введите название вашего города после команды, например:\n/city Москва"
+                        ).await?;
+                    }
+                    
+                    return Ok(());
+                }
+                
                 let city = data.replace("city_", "");
                 
                 // Получаем или создаем настройки пользователя
@@ -663,6 +721,7 @@ async fn handle_callback_query(
                     city: None,
                     notification_time: None,
                     cute_mode: false,
+                    state: None,
                 });
                 
                 let is_cute_mode = user.cute_mode;
@@ -688,7 +747,34 @@ async fn handle_callback_query(
                 
                 info!("Пользователь ID: {} выбрал город: {} через меню", user_id, city);
             } else if data.starts_with("time_") {
-                // Обрабатываем выбор времени
+                if data == "time_manual" {
+                    // Пользователь выбрал ручной ввод времени
+                    // Устанавливаем состояние ожидания ввода времени
+                    let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                        user_id,
+                        city: None,
+                        notification_time: None,
+                        cute_mode: false,
+                        state: None,
+                    });
+                    
+                    user.state = Some("waiting_for_time".to_string());
+                    storage.save_user(user).await;
+                    
+                    bot.answer_callback_query(q.id).await?;
+                    
+                    if let Some(message_id) = q.message.as_ref().map(|msg| msg.id) {
+                        bot.edit_message_text(chat_id, message_id, 
+                            "⏰ *Ввод времени вручную*\n\nПожалуйста, напишите время в формате ЧЧ:ММ, например: *08:30*\n\nДопустимое время: от 00:00 до 23:59"
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
+                    }
+                    
+                    return Ok(());
+                }
+                
+                // Обрабатываем выбор времени из меню
                 let time = data.replace("time_", "");
                 
                 // Получаем или создаем настройки пользователя
@@ -697,10 +783,12 @@ async fn handle_callback_query(
                     city: None,
                     notification_time: None,
                     cute_mode: false,
+                    state: None,
                 });
                 
                 let is_cute_mode = user.cute_mode;
                 user.notification_time = Some(time.clone());
+                user.state = None; // Сбрасываем состояние, если оно было
                 storage.save_user(user).await;
                 
                 // Формируем сообщение

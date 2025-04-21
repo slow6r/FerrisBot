@@ -14,6 +14,7 @@ pub struct UserSettings {
     pub city: Option<String>,
     pub notification_time: Option<String>,
     pub cute_mode: bool, // Флаг указывающий использует ли пользователь "милый режим"
+    pub state: Option<String>, // Добавляем поле для хранения состояния пользователя
 }
 
 #[derive(Clone)]
