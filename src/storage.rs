@@ -27,16 +27,30 @@ impl JsonStorage {
         // Создаем хранилище и пытаемся загрузить существующие данные
         let data = match fs::read_to_string(path) {
             Ok(content) => {
-                match serde_json::from_str::<Vec<UserSettings>>(&content) {
-                    Ok(users) => users,
-                    Err(e) => {
-                        error!("Ошибка десериализации данных: {}", e);
-                        Vec::new()
+                if content.trim().is_empty() {
+                    // Файл пустой, начинаем с пустого списка
+                    info!("Файл данных пустой, создан новый список пользователей");
+                    Vec::new()
+                } else {
+                    match serde_json::from_str::<Vec<UserSettings>>(&content) {
+                        Ok(users) => users,
+                        Err(e) => {
+                            error!("Ошибка десериализации данных: {}", e);
+                            // Создаем резервную копию проблемного файла
+                            let backup_path = format!("{}.backup", path);
+                            if let Err(copy_err) = fs::copy(path, &backup_path) {
+                                error!("Не удалось создать резервную копию: {}", copy_err);
+                            } else {
+                                info!("Создана резервная копия поврежденного файла данных: {}", backup_path);
+                            }
+                            Vec::new()
+                        }
                     }
                 }
             }
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 // Файл не найден, начинаем с пустого списка
+                info!("Файл данных не найден, создан новый файл: {}", path);
                 Vec::new()
             }
             Err(e) => {

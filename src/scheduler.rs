@@ -28,10 +28,29 @@ fn escape_markdown_v2(text: &str) -> String {
 pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client: WeatherClient) {
     info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждую минуту");
     
+    // Счетчик для отслеживания времени между проверками webhook
+    let mut webhook_check_counter = 0;
+    
     loop {
-        // Удаляем webhook в начале каждого цикла для предотвращения конфликтов
-        if let Err(e) = bot.delete_webhook().await {
-            error!("Ошибка при удалении webhook в планировщике: {}", e);
+        // Удаляем webhook только раз в 15 минут, чтобы уменьшить количество запросов
+        webhook_check_counter += 1;
+        if webhook_check_counter >= 15 {
+            webhook_check_counter = 0;
+            
+            // Удаляем webhook и обрабатываем возможные ошибки
+            match bot.delete_webhook().await {
+                Ok(_) => {
+                    info!("Webhook успешно удален (плановая проверка)");
+                },
+                Err(e) => {
+                    // Для сетевых ошибок не выводим полный текст, только тип
+                    if e.to_string().contains("network error") {
+                        warn!("Временная сетевая ошибка при удалении webhook. Следующая попытка через 15 минут");
+                    } else {
+                        error!("Ошибка при удалении webhook в планировщике: {}", e);
+                    }
+                }
+            }
         }
         
         let now = Local::now();
@@ -55,20 +74,21 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
             info!("Время массовой рассылки [{}]. Отправляем уведомления всем пользователям.", now_time);
             
             // Дополнительно удаляем webhook перед массовой рассылкой
-            if let Err(e) = bot.delete_webhook().await {
-                error!("Ошибка при удалении webhook перед массовой рассылкой: {}", e);
-            } else {
-                info!("Webhook успешно удален перед массовой рассылкой");
+            // и добавляем обработку ошибок
+            match bot.delete_webhook().await {
+                Ok(_) => {
+                    info!("Webhook успешно удален перед массовой рассылкой");
+                },
+                Err(e) => {
+                    if e.to_string().contains("network error") {
+                        warn!("Временная сетевая ошибка при удалении webhook перед массовой рассылкой");
+                    } else {
+                        error!("Ошибка при удалении webhook перед массовой рассылкой: {}", e);
+                    }
+                }
             }
             
             send_mass_notifications(&bot, &users, &weather_client, &now_time, today).await;
-            
-            // Снова удаляем webhook после массовой рассылки
-            if let Err(e) = bot.delete_webhook().await {
-                error!("Ошибка при удалении webhook после массовой рассылки: {}", e);
-            } else {
-                info!("Webhook успешно удален после массовой рассылки");
-            }
         }
 
         // Обычная проверка индивидуальных уведомлений
