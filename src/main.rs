@@ -2,6 +2,7 @@ use crate::storage::{JsonStorage, UserSettings};
 use dotenv::dotenv;
 use std::sync::Arc;
 use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use log::{info, error};
 use teloxide::utils::command::BotCommands;
 
@@ -60,6 +61,7 @@ async fn main() {
     // Создаем клоны для разных задач
     let storage_for_handler = Arc::clone(&storage); 
     let storage_for_scheduler = Arc::clone(&storage);
+    let storage_for_callback = Arc::clone(&storage);
 
     let bot = Bot::new(bot_token);
     
@@ -81,10 +83,10 @@ async fn main() {
     let commands = vec![
         BotCommand::new("start", "начать работу с ботом"),
         BotCommand::new("help", "показать список команд"),
-        BotCommand::new("city", "установить город (например, /city Москва)"),
-        BotCommand::new("time", "установить время уведомлений (например, /time 08:00)"),
+        BotCommand::new("city", "установить город"),
+        BotCommand::new("time", "установить время уведомлений"),
         BotCommand::new("weather", "узнать текущую погоду"),
-        BotCommand::new("forecast", "прогноз погоды на неделю"),
+        BotCommand::new("forecast", "получить прогноз погоды на неделю"),
     ];
     
     // Устанавливаем команды для всех чатов
@@ -101,6 +103,15 @@ async fn main() {
                 .endpoint(handle_commands),
         )
         .branch(dptree::endpoint(handle_message));
+        
+    // Добавляем обработчик для колбэков от кнопок
+    let callback_handler = Update::filter_callback_query()
+        .branch(dptree::endpoint(handle_callback_query));
+        
+    // Настраиваем маршрутизацию
+    let handler = dptree::entry()
+        .branch(command_handler)
+        .branch(callback_handler);
 
     // Планировщик уведомлений
     let scheduler_task = scheduler::start_scheduler(
@@ -111,11 +122,11 @@ async fn main() {
     info!("Планировщик уведомлений запущен");
 
     // Указываем зависимости для обработчика
-    let handler = dptree::deps![bot.clone(), storage_for_handler, weather_client];
+    let dependencies = dptree::deps![bot.clone(), storage_for_handler, storage_for_callback, weather_client];
 
     // Запускаем обе задачи параллельно
-    let mut dispatcher = teloxide::dispatching::Dispatcher::builder(bot, command_handler)
-        .dependencies(handler)
+    let mut dispatcher = teloxide::dispatching::Dispatcher::builder(bot, handler)
+        .dependencies(dependencies)
         .enable_ctrlc_handler()
         .build();
         
@@ -273,16 +284,97 @@ async fn send_start_message(bot: &Bot, msg: &Message, storage: &JsonStorage) -> 
                 • 🕒 Автоматически присылать прогноз в указанное время\n\
                 • 🔍 Предоставлять прогноз по запросу в любое время\n\n\
                 *Настройки:*\n\
-                /city \\[город\\] \\- установить твой город \\(например: /city Москва\\)\n\
-                /time \\[HH:MM\\] \\- установить время ежедневных уведомлений \\(например: /time 08:00\\)\n\
+                /city \\- выбрать город из списка или ввести свой\n\
+                /time \\- выбрать время уведомлений из списка или ввести своё\n\
                 /weather \\- получить текущий прогноз погоды\n\
                 /forecast \\- получить прогноз погоды на неделю\n\
                 /help \\- показать список всех команд\n\n\
-                Пожалуйста, начни с установки города командой /city";
+                *Для начала работы* нажмите /city для выбора города\\!";
+
+    // Создаем кнопку для быстрого перехода к выбору города
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            "🏙️ Выбрать город".to_string(),
+            "choose_city".to_string(),
+        )],
+    ]);
 
     bot.send_message(msg.chat.id, standard_text)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .reply_markup(keyboard)
         .await?;
+    Ok(())
+}
+
+// Функция для отображения меню выбора города
+async fn show_city_selection(bot: &Bot, chat_id: ChatId) -> ResponseResult<()> {
+    // Список популярных городов
+    let cities = vec![
+        "Москва", "Санкт-Петербург", "Новосибирск", "Екатеринбург", 
+        "Казань", "Нижний Новгород", "Челябинск", "Самара", "Омск", "Ростов-на-Дону"
+    ];
+    
+    // Создаем кнопки с городами
+    let mut keyboard = Vec::new();
+    for chunk in cities.chunks(2) {
+        let row = chunk.iter()
+            .map(|city| InlineKeyboardButton::callback(city.to_string(), format!("set_city:{}", city)))
+            .collect::<Vec<_>>();
+        keyboard.push(row);
+    }
+    
+    // Добавляем кнопку для ручного ввода
+    keyboard.push(vec![InlineKeyboardButton::callback(
+        "🔎 Ввести другой город...".to_string(),
+        "manual_city".to_string(),
+    )]);
+    
+    let keyboard = InlineKeyboardMarkup::new(keyboard);
+    
+    bot.send_message(
+        chat_id,
+        "Выберите город из списка или нажмите *Ввести другой город* для ручного ввода."
+    )
+    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+    .reply_markup(keyboard)
+    .await?;
+    
+    Ok(())
+}
+
+// Функция для отображения меню выбора времени
+async fn show_time_selection(bot: &Bot, chat_id: ChatId) -> ResponseResult<()> {
+    // Список популярных вариантов времени
+    let times = vec![
+        "07:00", "07:30", "08:00", "08:30", "09:00", 
+        "09:30", "10:00", "10:30", "11:00", "12:00"
+    ];
+    
+    // Создаем кнопки с временем
+    let mut keyboard = Vec::new();
+    for chunk in times.chunks(5) {
+        let row = chunk.iter()
+            .map(|time| InlineKeyboardButton::callback(time.to_string(), format!("set_time:{}", time)))
+            .collect::<Vec<_>>();
+        keyboard.push(row);
+    }
+    
+    // Добавляем кнопку для ручного ввода
+    keyboard.push(vec![InlineKeyboardButton::callback(
+        "⌨️ Ввести другое время...".to_string(),
+        "manual_time".to_string(),
+    )]);
+    
+    let keyboard = InlineKeyboardMarkup::new(keyboard);
+    
+    bot.send_message(
+        chat_id,
+        "Выберите время для ежедневных уведомлений о погоде из списка или нажмите *Ввести другое время* для ручного ввода в формате HH:MM."
+    )
+    .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+    .reply_markup(keyboard)
+    .await?;
+    
     Ok(())
 }
 
@@ -298,22 +390,35 @@ async fn send_help(bot: &Bot, msg: &Message, storage: &JsonStorage) -> ResponseR
         "✨ *Доступные команды:*\n\n\
          /start \\- начать работу с ботом\n\
          /help \\- показать это сообщение\n\
-         /city \\[название\\] \\- установить твой город \\(например: /city Москва\\)\n\
-         /time \\[ЧЧ:ММ\\] \\- установить время ежедневных уведомлений \\(например: /time 08:00\\)\n\
+         /city \\- выбрать город из списка или ввести свой\n\
+         /time \\- выбрать время ежедневных уведомлений из списка или ввести своё\n\
          /weather \\- узнать текущую погоду\n\
          /forecast \\- получить прогноз погоды на неделю 💖"
     } else {
         "🌟 *Доступные команды:*\n\n\
          /start \\- начать работу с ботом\n\
          /help \\- показать это сообщение\n\
-         /city \\[название\\] \\- установить город \\(например: /city Москва\\)\n\
-         /time \\[ЧЧ:ММ\\] \\- установить время уведомлений \\(например: /time 08:00\\)\n\
+         /city \\- выбрать город из списка или ввести свой\n\
+         /time \\- выбрать время уведомлений из списка или ввести своё\n\
          /weather \\- узнать текущую погоду\n\
          /forecast \\- получить прогноз погоды на неделю"
     };
 
+    // Добавляем кнопки для быстрого доступа
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            "🏙️ Выбрать город".to_string(),
+            "choose_city".to_string(),
+        )],
+        vec![InlineKeyboardButton::callback(
+            "⏰ Выбрать время".to_string(),
+            "choose_time".to_string(),
+        )],
+    ]);
+
     bot.send_message(msg.chat.id, help_text)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .reply_markup(keyboard)
         .await?;
     Ok(())
 }
@@ -324,15 +429,15 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
         .and_then(|user| user.username.clone())
         .unwrap_or_else(|| format!("ID: {}", user_id));
     
-    // Проверка что город не пустой
+    // Если аргумент пустой, показываем меню выбора города
     if city_arg.trim().is_empty() {
-        info!("Пользователь @{} пытался установить пустой город", username);
-        bot.send_message(
-            msg.chat.id, 
-            "🚫 Пожалуйста, укажите город после команды\\. Например: /city Москва"
-        ).await?;
-        return Ok(());
+        info!("Пользователь @{} запросил меню выбора города", username);
+        return show_city_selection(bot, msg.chat.id).await;
     }
+
+    // Проверка что город не пустой (для обратной совместимости)
+    let city_name = city_arg.trim();
+    info!("Пользователь @{} устанавливает город: {}", username, city_name);
 
     let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
         user_id,
@@ -344,20 +449,29 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
     // Сохраняем флаг cute_mode перед сохранением пользователя
     let is_cute_mode = user.cute_mode;
     
-    user.city = Some(city_arg.trim().to_string());
+    user.city = Some(city_name.to_string());
     storage.save_user(user).await;
     
-    info!("Пользователь @{} успешно установил город: {}", username, city_arg.trim());
+    info!("Пользователь @{} успешно установил город: {}", username, city_name);
 
     // Формируем сообщение в зависимости от режима
     let message = if is_cute_mode {
-        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time \\[HH:MM\\]", escape_markdown_v2(city_arg.trim()))
+        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_name))
     } else {
-        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time \\[HH:MM\\]", escape_markdown_v2(city_arg.trim()))
+        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_name))
     };
+
+    // Создаем кнопку для быстрого перехода к выбору времени
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            "⏰ Выбрать время уведомлений".to_string(),
+            "choose_time".to_string(),
+        )],
+    ]);
 
     bot.send_message(msg.chat.id, message)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .reply_markup(keyboard)
         .await?;
     
     Ok(())
@@ -369,19 +483,18 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
         .and_then(|user| user.username.clone())
         .unwrap_or_else(|| format!("ID: {}", user_id));
     
-    // Проверка корректности формата времени
+    // Если аргумент пустой, показываем меню выбора времени
     if time_arg.trim().is_empty() {
-        info!("Пользователь @{} пытался установить пустое время", username);
-        bot.send_message(
-            msg.chat.id, 
-            "🚫 Пожалуйста, укажите время в формате HH:MM\\. Например: /time 08:00"
-        ).await?;
-        return Ok(());
+        info!("Пользователь @{} запросил меню выбора времени", username);
+        return show_time_selection(bot, msg.chat.id).await;
     }
     
+    // Проверка корректности формата времени
+    let time_str = time_arg.trim();
+    
     // Проверяем формат времени (HH:MM)
-    if !is_valid_time_format(time_arg.trim()) {
-        info!("Пользователь @{} указал некорректный формат времени: {}", username, time_arg);
+    if !is_valid_time_format(time_str) {
+        info!("Пользователь @{} указал некорректный формат времени: {}", username, time_str);
         bot.send_message(
             msg.chat.id, 
             "⚠️ Некорректный формат времени\\. Используйте формат HH:MM, например: 08:00"
@@ -399,16 +512,16 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
     // Сохраняем флаг cute_mode перед сохранением пользователя
     let is_cute_mode = user.cute_mode;
     
-    user.notification_time = Some(time_arg.trim().to_string());
+    user.notification_time = Some(time_str.to_string());
     storage.save_user(user).await;
     
-    info!("Пользователь @{} успешно установил время уведомлений: {}", username, time_arg.trim());
+    info!("Пользователь @{} успешно установил время уведомлений: {}", username, time_str);
 
     // Сообщение в зависимости от режима
     let message = if is_cute_mode {
-        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", escape_markdown_v2(time_arg.trim()))
+        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", escape_markdown_v2(time_str))
     } else {
-        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", escape_markdown_v2(time_arg.trim()))
+        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", escape_markdown_v2(time_str))
     };
 
     bot.send_message(msg.chat.id, message)
@@ -583,4 +696,70 @@ fn is_valid_time_format(time: &str) -> bool {
         }
     }
     false
+}
+
+// Функция обработки колбэков от inline-кнопок
+async fn handle_callback_query(
+    bot: Bot,
+    query: CallbackQuery,
+    storage: Arc<JsonStorage>,
+) -> ResponseResult<()> {
+    // Проверяем, есть ли данные в колбэк-запросе
+    if let Some(data) = &query.data {
+        // Клонируем message, чтобы избежать partial move
+        let message_opt = query.message.clone();
+        
+        let chat_id = if let Some(message) = &message_opt {
+            message.chat.id
+        } else {
+            // Если нет сообщения, просто возвращаемся
+            return Ok(());
+        };
+        
+        let username = query.from.username.clone().unwrap_or_else(|| format!("ID: {}", query.from.id.0));
+        
+        info!("Пользователь @{} нажал на кнопку с callback: {}", username, data);
+        
+        // Обрабатываем различные типы колбэков
+        if data == "choose_city" {
+            // Показываем меню выбора города
+            show_city_selection(&bot, chat_id).await?;
+        } else if data == "choose_time" {
+            // Показываем меню выбора времени
+            show_time_selection(&bot, chat_id).await?;
+        } else if data == "manual_city" {
+            // Просим пользователя ввести город вручную
+            bot.send_message(
+                chat_id,
+                "Пожалуйста, введите название города в формате:\n\n/city Название_города"
+            ).await?;
+        } else if data == "manual_time" {
+            // Просим пользователя ввести время вручную
+            bot.send_message(
+                chat_id,
+                "Пожалуйста, введите время для уведомлений в формате HH:MM, например:\n\n/time 08:00"
+            ).await?;
+        } else if data.starts_with("set_city:") {
+            // Устанавливаем город из выбранного значения
+            let city = data.trim_start_matches("set_city:");
+            
+            // Используем существующую команду set_city
+            if let Some(message) = &message_opt {
+                set_city(&bot, message, &storage, city).await?;
+            }
+        } else if data.starts_with("set_time:") {
+            // Устанавливаем время из выбранного значения
+            let time = data.trim_start_matches("set_time:");
+            
+            // Используем существующую команду set_time
+            if let Some(message) = &message_opt {
+                set_time(&bot, message, &storage, time).await?;
+            }
+        }
+        
+        // Отвечаем на колбэк, чтобы убрать индикатор загрузки
+        bot.answer_callback_query(query.id).await?;
+    }
+    
+    Ok(())
 }
