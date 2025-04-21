@@ -12,9 +12,7 @@ struct OpenWeatherResponse {
     main: MainInfo,
     weather: Vec<WeatherInfo>,
     wind: WindInfo,
-    #[allow(dead_code)]
     name: String,
-    #[allow(dead_code)]
     dt: i64,
     clouds: CloudsInfo,
     sys: SysInfo,
@@ -26,7 +24,6 @@ struct MainInfo {
     temp: f32,
     feels_like: f32,
     humidity: f32,
-    #[allow(dead_code)]
     pressure: f32,
     temp_min: f32,
     temp_max: f32,
@@ -52,7 +49,6 @@ struct CloudsInfo {
 
 #[derive(Debug, Deserialize)]
 struct SysInfo {
-    #[allow(dead_code)]
     country: String,
     sunrise: i64,
     sunset: i64,
