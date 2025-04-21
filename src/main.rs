@@ -4,6 +4,8 @@ use std::sync::Arc;
 use teloxide::prelude::*;
 use log::{info, error};
 use teloxide::utils::command::BotCommands;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::types::CallbackQuery;
 
 mod weather;
 mod storage;
@@ -109,6 +111,15 @@ async fn main() {
                 .endpoint(handle_commands),
         )
         .branch(dptree::endpoint(handle_message));
+    
+    // Добавляем обработчик для колбэков от инлайн-клавиатуры
+    let callback_handler = Update::filter_callback_query()
+        .branch(dptree::endpoint(handle_callback_query));
+    
+    // Объединяем обработчики
+    let handler = dptree::entry()
+        .branch(command_handler)
+        .branch(callback_handler);
 
     // Планировщик уведомлений
     let scheduler_task = scheduler::start_scheduler(
@@ -119,11 +130,11 @@ async fn main() {
     info!("Планировщик уведомлений запущен");
 
     // Указываем зависимости для обработчика
-    let handler = dptree::deps![bot.clone(), storage_for_handler, weather_client];
+    let handler_dependencies = dptree::deps![bot.clone(), storage_for_handler, weather_client];
 
     // Запускаем обе задачи параллельно
-    let mut dispatcher = teloxide::dispatching::Dispatcher::builder(bot, command_handler)
-        .dependencies(handler)
+    let mut dispatcher = teloxide::dispatching::Dispatcher::builder(bot, handler)
+        .dependencies(handler_dependencies)
         .enable_ctrlc_handler()
         .build();
         
@@ -283,9 +294,10 @@ async fn send_start_message(bot: &Bot, msg: &Message, storage: &JsonStorage) -> 
                 • 🕒 Автоматически присылать прогноз в указанное время\n\
                 • 🔍 Предоставлять прогноз по запросу в любое время\n\n\
                 *Для начала работы:*\n\
-                1️⃣ Сначала установи свой город командой /city \\[город\\] \\(например: /city Москва\\)\n\
-                2️⃣ Затем установи время ежедневных уведомлений: /time \\[HH:MM\\] \\(например: /time 08:00\\)\n\
+                1️⃣ Сначала установи свой город командой /city\n\
+                2️⃣ Затем установи время уведомлений: /time\n\
                 3️⃣ Готово\\! Бот будет присылать прогноз погоды по расписанию\n\n\
+                *Важно:* При вводе команд /city и /time можно выбрать вариант из меню или ввести значение вручную\\.\n\n\
                 *Другие команды:*\n\
                 /weather \\- получить текущий прогноз погоды\n\
                 /forecast \\- получить прогноз погоды на неделю\n\
@@ -299,7 +311,7 @@ async fn send_start_message(bot: &Bot, msg: &Message, storage: &JsonStorage) -> 
     // Отправляем дополнительное сообщение с подсказкой
     bot.send_message(
         msg.chat.id,
-        "👉 Пожалуйста, начните с установки вашего города командой:\n/city Москва\n(замените Москва на ваш город)"
+        "👉 Пожалуйста, начните с установки вашего города командой /city"
     ).await?;
     
     Ok(())
@@ -317,18 +329,20 @@ async fn send_help(bot: &Bot, msg: &Message, storage: &JsonStorage) -> ResponseR
         "✨ *Доступные команды:*\n\n\
          /start \\- начать работу с ботом\n\
          /help \\- показать это сообщение\n\
-         /city \\[название\\] \\- установить твой город \\(например: /city Москва\\)\n\
-         /time \\[ЧЧ:ММ\\] \\- установить время ежедневных уведомлений \\(например: /time 08:00\\)\n\
+         /city \\- выбрать город из списка или ввести вручную\n\
+         /time \\- выбрать время уведомлений из списка или ввести вручную\n\
          /weather \\- узнать текущую погоду\n\
-         /forecast \\- получить прогноз погоды на неделю 💖"
+         /forecast \\- получить прогноз погоды на неделю 💖\n\n\
+         *Совет:* Команды /city и /time без параметров покажут интерактивное меню для выбора\\!"
     } else {
         "🌟 *Доступные команды:*\n\n\
          /start \\- начать работу с ботом\n\
          /help \\- показать это сообщение\n\
-         /city \\[название\\] \\- установить город \\(например: /city Москва\\)\n\
-         /time \\[ЧЧ:ММ\\] \\- установить время уведомлений \\(например: /time 08:00\\)\n\
+         /city \\- выбрать город из списка или ввести вручную\n\
+         /time \\- выбрать время уведомлений из списка или ввести вручную\n\
          /weather \\- узнать текущую погоду\n\
-         /forecast \\- получить прогноз погоды на неделю"
+         /forecast \\- получить прогноз погоды на неделю\n\n\
+         *Совет:* Команды /city и /time без параметров покажут интерактивное меню для выбора\\!"
     };
 
     bot.send_message(msg.chat.id, help_text)
@@ -343,12 +357,24 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
         .and_then(|user| user.username.clone())
         .unwrap_or_else(|| format!("ID: {}", user_id));
     
-    // Проверка что город не пустой
+    // Если аргумент пустой, показываем клавиатуру выбора города
     if city_arg.trim().is_empty() {
-        info!("Пользователь @{} пытался установить пустой город", username);
+        info!("Пользователь @{} запросил список городов", username);
         bot.send_message(
             msg.chat.id, 
-            "🚫 Пожалуйста, укажите город после команды\\. Например: /city Москва"
+            "🏙️ *Выберите город из списка или введите его вручную*\n\nДля ручного ввода используйте команду /city \\[название города\\]"
+        )
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .reply_markup(get_city_keyboard())
+        .await?;
+        return Ok(());
+    }
+    
+    // Специальная обработка для колбэка "manual"
+    if city_arg.trim() == "manual" {
+        bot.send_message(
+            msg.chat.id, 
+            "✏️ Пожалуйста, введите название вашего города после команды, например:\n/city Москва"
         ).await?;
         return Ok(());
     }
@@ -370,9 +396,9 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
 
     // Формируем сообщение в зависимости от режима
     let message = if is_cute_mode {
-        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time \\[HH:MM\\]", escape_markdown_v2(city_arg.trim()))
+        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_arg.trim()))
     } else {
-        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time \\[HH:MM\\]", escape_markdown_v2(city_arg.trim()))
+        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_arg.trim()))
     };
 
     bot.send_message(msg.chat.id, message)
@@ -388,12 +414,24 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
         .and_then(|user| user.username.clone())
         .unwrap_or_else(|| format!("ID: {}", user_id));
     
-    // Проверка корректности формата времени
+    // Если аргумент пустой, показываем клавиатуру выбора времени
     if time_arg.trim().is_empty() {
-        info!("Пользователь @{} пытался установить пустое время", username);
+        info!("Пользователь @{} запросил список времени", username);
         bot.send_message(
             msg.chat.id, 
-            "🚫 Пожалуйста, укажите время в формате HH:MM\\. Например: /time 08:00"
+            "⏰ *Выберите время ежедневных уведомлений о погоде*\n\nДля ручного ввода используйте команду /time \\[ЧЧ:ММ\\]"
+        )
+        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+        .reply_markup(get_time_keyboard())
+        .await?;
+        return Ok(());
+    }
+
+    // Специальная обработка для колбэка "manual"
+    if time_arg.trim() == "manual" {
+        bot.send_message(
+            msg.chat.id, 
+            "✏️ Пожалуйста, введите время в формате ЧЧ:ММ после команды, например:\n/time 08:00"
         ).await?;
         return Ok(());
     }
@@ -602,4 +640,156 @@ fn is_valid_time_format(time: &str) -> bool {
         }
     }
     false
+}
+
+// Обработчик колбэков от инлайн-клавиатуры
+async fn handle_callback_query(
+    bot: Bot,
+    q: CallbackQuery,
+    storage: Arc<JsonStorage>,
+) -> ResponseResult<()> {
+    // Получаем ID пользователя
+    if let Some(chat_id) = q.message.as_ref().map(|msg| msg.chat.id) {
+        let user_id = chat_id.0;
+        
+        if let Some(data) = q.data {
+            if data.starts_with("city_") {
+                // Обрабатываем выбор города
+                let city = data.replace("city_", "");
+                
+                // Получаем или создаем настройки пользователя
+                let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                    user_id,
+                    city: None,
+                    notification_time: None,
+                    cute_mode: false,
+                });
+                
+                let is_cute_mode = user.cute_mode;
+                user.city = Some(city.clone());
+                storage.save_user(user).await;
+                
+                // Формируем сообщение
+                let message = if is_cute_mode {
+                    format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(&city))
+                } else {
+                    format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(&city))
+                };
+                
+                // Отвечаем на колбэк
+                bot.answer_callback_query(q.id).await?;
+                
+                // Редактируем сообщение с инлайн-клавиатурой
+                if let Some(message_id) = q.message.as_ref().map(|msg| msg.id) {
+                    bot.edit_message_text(chat_id, message_id, message)
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
+                }
+                
+                info!("Пользователь ID: {} выбрал город: {} через меню", user_id, city);
+            } else if data.starts_with("time_") {
+                // Обрабатываем выбор времени
+                let time = data.replace("time_", "");
+                
+                // Получаем или создаем настройки пользователя
+                let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                    user_id,
+                    city: None,
+                    notification_time: None,
+                    cute_mode: false,
+                });
+                
+                let is_cute_mode = user.cute_mode;
+                user.notification_time = Some(time.clone());
+                storage.save_user(user).await;
+                
+                // Формируем сообщение
+                let message = if is_cute_mode {
+                    format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", escape_markdown_v2(&time))
+                } else {
+                    format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", escape_markdown_v2(&time))
+                };
+                
+                // Отвечаем на колбэк
+                bot.answer_callback_query(q.id).await?;
+                
+                // Редактируем сообщение с инлайн-клавиатурой
+                if let Some(message_id) = q.message.as_ref().map(|msg| msg.id) {
+                    bot.edit_message_text(chat_id, message_id, message)
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
+                }
+                
+                info!("Пользователь ID: {} выбрал время: {} через меню", user_id, time);
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+// Получение списка популярных городов России
+fn get_city_keyboard() -> InlineKeyboardMarkup {
+    let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
+    
+    let cities = [
+        "Москва", "Санкт-Петербург", "Новосибирск", "Екатеринбург", 
+        "Казань", "Нижний Новгород", "Челябинск", "Самара", 
+        "Омск", "Ростов-на-Дону", "Уфа", "Красноярск", 
+        "Воронеж", "Пермь", "Волгоград"
+    ];
+    
+    for chunk in cities.chunks(3) {
+        let row = chunk.iter()
+            .map(|city| {
+                InlineKeyboardButton::callback(city.to_string(), format!("city_{}", city))
+            })
+            .collect();
+        keyboard.push(row);
+    }
+    
+    // Добавляем напоминание о ручном вводе
+    keyboard.push(vec![
+        InlineKeyboardButton::callback("Ввести город вручную".to_string(), "city_manual".to_string())
+    ]);
+    
+    InlineKeyboardMarkup::new(keyboard)
+}
+
+// Получение клавиатуры для выбора времени
+fn get_time_keyboard() -> InlineKeyboardMarkup {
+    let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
+    
+    // Утреннее время
+    let morning = vec![
+        InlineKeyboardButton::callback("06:00".to_string(), "time_06:00".to_string()),
+        InlineKeyboardButton::callback("07:00".to_string(), "time_07:00".to_string()),
+        InlineKeyboardButton::callback("08:00".to_string(), "time_08:00".to_string()),
+        InlineKeyboardButton::callback("09:00".to_string(), "time_09:00".to_string()),
+    ];
+    
+    // Дневное время
+    let day = vec![
+        InlineKeyboardButton::callback("12:00".to_string(), "time_12:00".to_string()),
+        InlineKeyboardButton::callback("14:00".to_string(), "time_14:00".to_string()),
+        InlineKeyboardButton::callback("16:00".to_string(), "time_16:00".to_string()),
+    ];
+    
+    // Вечернее время
+    let evening = vec![
+        InlineKeyboardButton::callback("18:00".to_string(), "time_18:00".to_string()),
+        InlineKeyboardButton::callback("20:00".to_string(), "time_20:00".to_string()),
+        InlineKeyboardButton::callback("22:00".to_string(), "time_22:00".to_string()),
+    ];
+    
+    keyboard.push(morning);
+    keyboard.push(day);
+    keyboard.push(evening);
+    
+    // Добавляем напоминание о ручном вводе
+    keyboard.push(vec![
+        InlineKeyboardButton::callback("Ввести время вручную".to_string(), "time_manual".to_string())
+    ]);
+    
+    InlineKeyboardMarkup::new(keyboard)
 }
