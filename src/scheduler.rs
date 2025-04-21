@@ -1,29 +1,15 @@
 use teloxide::types::ChatId;
 use teloxide::Bot;
-use super::storage::JsonStorage;
-use super::weather::WeatherClient;
-use chrono::{Local, Datelike, Weekday, DateTime, Timelike, Utc};
+use crate::storage::JsonStorage;
+use crate::weather::WeatherClient;
+use crate::utils;
+use chrono::{Local, Datelike, Weekday, Timelike};
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;
 use teloxide::payloads::SendMessageSetters;
 use teloxide::prelude::Requester;
 use rand::Rng;
 use log::{info, error, warn};
-
-// Вспомогательная функция для экранирования специальных символов Markdown
-fn escape_markdown_v2(text: &str) -> String {
-    let special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
-    let mut result = String::with_capacity(text.len() * 2); // Предварительное выделение памяти
-    
-    for ch in text.chars() {
-        if special_chars.contains(&ch) {
-            result.push('\\');
-        }
-        result.push(ch);
-    }
-    
-    result
-}
 
 pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client: WeatherClient) {
     info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждую минуту");
@@ -111,16 +97,16 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                     
                                     // Формируем полное сообщение с экранированием
                                     format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}\n\n{}", 
-                                        escape_markdown_v2(&greeting), 
-                                        escape_markdown_v2(city), 
-                                        escape_markdown_v2(&weather_text), 
-                                        escape_markdown_v2(&cute_message), 
-                                        escape_markdown_v2(&good_day_wish))
+                                        utils::escape_markdown_v2(&greeting), 
+                                        utils::escape_markdown_v2(city), 
+                                        utils::escape_markdown_v2(&weather_text), 
+                                        utils::escape_markdown_v2(&cute_message), 
+                                        utils::escape_markdown_v2(&good_day_wish))
                                 } else {
                                     // Стандартный режим: только погода
                                     format!("🌅 *Утренний прогноз погоды*\n\n🌦 *Погода в {}*\n\n{}", 
-                                        escape_markdown_v2(city), 
-                                        escape_markdown_v2(&weather_text))
+                                        utils::escape_markdown_v2(city), 
+                                        utils::escape_markdown_v2(&weather_text))
                                 };
                                 
                                 // Отправляем сообщение
@@ -139,10 +125,10 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                 // Отправляем уведомление об ошибке
                                 let error_message = if user.cute_mode {
                                     format!("Доброе утро\\! К сожалению, не удалось получить данные о погоде: {}", 
-                                        escape_markdown_v2(&e.to_string()))
+                                        utils::escape_markdown_v2(&e.to_string()))
                                 } else {
                                     format!("❌ *Ошибка*: Не удалось получить данные о погоде: {}", 
-                                        escape_markdown_v2(&e.to_string()))
+                                        utils::escape_markdown_v2(&e.to_string()))
                                 };
                                 
                                 if let Err(e) = bot.send_message(
@@ -220,7 +206,7 @@ fn get_good_day_wish() -> String {
 // Функция для отправки уведомлений всем пользователям
 async fn send_mass_notifications(
     bot: &Bot, 
-    users: &Vec<super::storage::UserSettings>, 
+    users: &Vec<crate::storage::UserSettings>, 
     weather_client: &WeatherClient,
     time: &str,
     day: Weekday
@@ -246,10 +232,10 @@ async fn send_mass_notifications(
                         
                         // Формируем полное сообщение с экранированием
                         format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}", 
-                            escape_markdown_v2(&greeting), 
-                            escape_markdown_v2(city), 
-                            escape_markdown_v2(&weather_text), 
-                            escape_markdown_v2(&cute_message))
+                            utils::escape_markdown_v2(&greeting), 
+                            utils::escape_markdown_v2(city), 
+                            utils::escape_markdown_v2(&weather_text), 
+                            utils::escape_markdown_v2(&cute_message))
                     } else {
                         // Стандартный режим: только погода
                         let greeting = if time == "12:00" {
@@ -260,8 +246,8 @@ async fn send_mass_notifications(
                         
                         format!("{}\n\n🌦 *Погода в {}*\n\n{}", 
                             greeting, 
-                            escape_markdown_v2(city), 
-                            escape_markdown_v2(&weather_text))
+                            utils::escape_markdown_v2(city), 
+                            utils::escape_markdown_v2(&weather_text))
                     };
                     
                     // Отправляем сообщение

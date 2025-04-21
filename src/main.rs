@@ -2,13 +2,14 @@ use crate::storage::{JsonStorage, UserSettings};
 use dotenv::dotenv;
 use std::sync::Arc;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use log::{info, error};
 use teloxide::utils::command::BotCommands;
 
 mod weather;
 mod storage;
 mod scheduler;
+mod utils;
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
@@ -25,21 +26,6 @@ enum Command {
     Weather,
     #[command(description = "прогноз погоды на неделю")]
     Forecast,
-}
-
-// Вспомогательная функция для экранирования специальных символов Markdown
-fn escape_markdown_v2(text: &str) -> String {
-    let special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
-    let mut result = String::with_capacity(text.len() * 2); // Предварительное выделение памяти
-    
-    for ch in text.chars() {
-        if special_chars.contains(&ch) {
-            result.push('\\');
-        }
-        result.push(ch);
-    }
-    
-    result
 }
 
 #[tokio::main]
@@ -456,9 +442,9 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
 
     // Формируем сообщение в зависимости от режима
     let message = if is_cute_mode {
-        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_name))
+        format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", utils::escape_markdown_v2(city_name))
     } else {
-        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_name))
+        format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", utils::escape_markdown_v2(city_name))
     };
 
     // Создаем кнопку для быстрого перехода к выбору времени
@@ -519,9 +505,9 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
 
     // Сообщение в зависимости от режима
     let message = if is_cute_mode {
-        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", escape_markdown_v2(time_str))
+        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время я буду отправлять тебе прогноз погоды и милое сообщение\\! 💖", utils::escape_markdown_v2(time_str))
     } else {
-        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", escape_markdown_v2(time_str))
+        format!("⏰ *Время уведомлений установлено:* {}\n\nТеперь каждый день в это время вы будете получать актуальный прогноз погоды\\.", utils::escape_markdown_v2(time_str))
     };
 
     bot.send_message(msg.chat.id, message)
@@ -561,13 +547,13 @@ async fn send_current_weather(
                             let message = if user.cute_mode {
                                 // Милый режим
                                 format!("💖 *Специально для тебя, погода в {}*\n\n{}", 
-                                    escape_markdown_v2(city), 
-                                    escape_markdown_v2(&weather))
+                                    utils::escape_markdown_v2(city), 
+                                    utils::escape_markdown_v2(&weather))
                             } else {
                                 // Стандартный режим
                                 format!("🌦️ *Погода в {}*\n\n{}", 
-                                    escape_markdown_v2(city), 
-                                    escape_markdown_v2(&weather))
+                                    utils::escape_markdown_v2(city), 
+                                    utils::escape_markdown_v2(&weather))
                             };
                             
                             bot.send_message(msg.chat.id, message)
@@ -578,7 +564,7 @@ async fn send_current_weather(
                             error!("Ошибка получения погоды для пользователя @{}: {}", username, e);
                             bot.send_message(
                                 msg.chat.id, 
-                                format!("❌ *Не удалось получить погоду:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
+                                format!("❌ *Не удалось получить погоду:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", utils::escape_markdown_v2(&e.to_string()))
                             )
                             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                             .await?;
@@ -637,8 +623,8 @@ async fn send_weekly_forecast(
                             info!("Успешно получен прогноз на неделю для пользователя @{}", username);
                             
                             // Экранируем специальные символы для MarkdownV2
-                            let city_escaped = escape_markdown_v2(city);
-                            let forecast_escaped = escape_markdown_v2(&forecast);
+                            let city_escaped = utils::escape_markdown_v2(city);
+                            let forecast_escaped = utils::escape_markdown_v2(&forecast);
                             
                             // Формируем сообщение в зависимости от режима
                             let message = if user.cute_mode {
@@ -657,7 +643,7 @@ async fn send_weekly_forecast(
                             error!("Ошибка получения прогноза на неделю для пользователя @{}: {}", username, e);
                             bot.send_message(
                                 msg.chat.id, 
-                                format!("❌ *Не удалось получить прогноз:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", escape_markdown_v2(&e.to_string()))
+                                format!("❌ *Не удалось получить прогноз:*\n{}\n\nПроверь правильность названия города или попробуй позже\\.", utils::escape_markdown_v2(&e.to_string()))
                             )
                             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                             .await?;
