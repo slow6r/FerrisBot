@@ -62,6 +62,14 @@ async fn main() {
     let storage_for_scheduler = Arc::clone(&storage);
 
     let bot = Bot::new(bot_token);
+    
+    // Удаляем webhook перед запуском бота, чтобы избежать конфликта с getUpdates
+    if let Err(e) = bot.delete_webhook().await {
+        error!("Ошибка при удалении webhook: {}", e);
+    } else {
+        info!("Webhook успешно удален");
+    }
+    
     let weather_client = weather::WeatherClient::new(weather_api_key.clone());
     
     // Принудительно устанавливаем команды в меню бота и проверяем результат
