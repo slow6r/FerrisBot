@@ -29,6 +29,11 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
     info!("Планировщик уведомлений запущен. Проверка расписания будет выполняться каждую минуту");
     
     loop {
+        // Удаляем webhook в начале каждого цикла для предотвращения конфликтов
+        if let Err(e) = bot.delete_webhook().await {
+            error!("Ошибка при удалении webhook в планировщике: {}", e);
+        }
+        
         let now = Local::now();
         let now_time = now.format("%H:%M").to_string();
         let today = now.weekday();
@@ -48,7 +53,22 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
         
         if is_mass_notification_time {
             info!("Время массовой рассылки [{}]. Отправляем уведомления всем пользователям.", now_time);
+            
+            // Дополнительно удаляем webhook перед массовой рассылкой
+            if let Err(e) = bot.delete_webhook().await {
+                error!("Ошибка при удалении webhook перед массовой рассылкой: {}", e);
+            } else {
+                info!("Webhook успешно удален перед массовой рассылкой");
+            }
+            
             send_mass_notifications(&bot, &users, &weather_client, &now_time, today).await;
+            
+            // Снова удаляем webhook после массовой рассылки
+            if let Err(e) = bot.delete_webhook().await {
+                error!("Ошибка при удалении webhook после массовой рассылки: {}", e);
+            } else {
+                info!("Webhook успешно удален после массовой рассылки");
+            }
         }
 
         // Обычная проверка индивидуальных уведомлений
@@ -61,18 +81,27 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                         // Получаем погоду
                         match weather_client.get_weather(city).await {
                             Ok(weather_text) => {
-                                // Получаем приветствие и дополнительные сообщения
-                                let greeting = get_greeting(today);
-                                let cute_message = get_cute_message();
-                                let good_day_wish = get_good_day_wish();
-                                
-                                // Формируем полное сообщение с экранированием
-                                let message = format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}\n\n{}", 
-                                    escape_markdown_v2(&greeting), 
-                                    escape_markdown_v2(city), 
-                                    escape_markdown_v2(&weather_text), 
-                                    escape_markdown_v2(&cute_message), 
-                                    escape_markdown_v2(&good_day_wish));
+                                // Формируем сообщение в зависимости от режима бота
+                                let message = if user.cute_mode {
+                                    // Милый режим: с приветствием и милыми сообщениями
+                                    // Получаем приветствие и дополнительные сообщения
+                                    let greeting = get_greeting(today);
+                                    let cute_message = get_cute_message();
+                                    let good_day_wish = get_good_day_wish();
+                                    
+                                    // Формируем полное сообщение с экранированием
+                                    format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}\n\n{}", 
+                                        escape_markdown_v2(&greeting), 
+                                        escape_markdown_v2(city), 
+                                        escape_markdown_v2(&weather_text), 
+                                        escape_markdown_v2(&cute_message), 
+                                        escape_markdown_v2(&good_day_wish))
+                                } else {
+                                    // Стандартный режим: только погода
+                                    format!("🌅 *Утренний прогноз погоды*\n\n🌦 *Погода в {}*\n\n{}", 
+                                        escape_markdown_v2(city), 
+                                        escape_markdown_v2(&weather_text))
+                                };
                                 
                                 // Отправляем сообщение
                                 if let Err(e) = bot.send_message(ChatId(user.user_id), message)
@@ -88,9 +117,17 @@ pub async fn start_scheduler(bot: Bot, storage: Arc<JsonStorage>, weather_client
                                 warn!("Ошибка получения погоды для пользователя {}: {}", user.user_id, e);
                                 
                                 // Отправляем уведомление об ошибке
+                                let error_message = if user.cute_mode {
+                                    format!("Доброе утро\\! К сожалению, не удалось получить данные о погоде: {}", 
+                                        escape_markdown_v2(&e.to_string()))
+                                } else {
+                                    format!("❌ *Ошибка*: Не удалось получить данные о погоде: {}", 
+                                        escape_markdown_v2(&e.to_string()))
+                                };
+                                
                                 if let Err(e) = bot.send_message(
                                     ChatId(user.user_id),
-                                    format!("Доброе утро\\! К сожалению, не удалось получить данные о погоде: {}", escape_markdown_v2(&e.to_string()))
+                                    error_message
                                 ).parse_mode(teloxide::types::ParseMode::MarkdownV2).await {
                                     error!("Не удалось отправить уведомление об ошибке пользователю {}: {}", user.user_id, e);
                                 }
@@ -168,12 +205,6 @@ async fn send_mass_notifications(
     time: &str,
     day: Weekday
 ) {
-    let greeting = if time == "12:00" {
-        get_noon_greeting(day)
-    } else {
-        get_evening_greeting(day)
-    };
-
     for user in users {
         if let Some(city) = &user.city {
             info!("Отправка массового уведомления пользователю ID: {}, город: {}", user.user_id, city);
@@ -181,15 +212,37 @@ async fn send_mass_notifications(
             // Получаем погоду
             match weather_client.get_weather(city).await {
                 Ok(weather_text) => {
-                    // Получаем милое сообщение
-                    let cute_message = get_cute_message();
-                    
-                    // Формируем полное сообщение с экранированием
-                    let message = format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}", 
-                        escape_markdown_v2(&greeting), 
-                        escape_markdown_v2(city), 
-                        escape_markdown_v2(&weather_text), 
-                        escape_markdown_v2(&cute_message));
+                    // Получаем сообщение в соответствии с режимом пользователя
+                    let message = if user.cute_mode {
+                        // Милый режим: приветствие и милые сообщения
+                        let greeting = if time == "12:00" {
+                            get_noon_greeting(day)
+                        } else {
+                            get_evening_greeting(day)
+                        };
+                        
+                        // Получаем милое сообщение
+                        let cute_message = get_cute_message();
+                        
+                        // Формируем полное сообщение с экранированием
+                        format!("{}\n\n🌦 *Погода в {}*\n\n{}\n\n{}", 
+                            escape_markdown_v2(&greeting), 
+                            escape_markdown_v2(city), 
+                            escape_markdown_v2(&weather_text), 
+                            escape_markdown_v2(&cute_message))
+                    } else {
+                        // Стандартный режим: только погода
+                        let greeting = if time == "12:00" {
+                            "🕛 *Дневной прогноз погоды*".to_string()
+                        } else {
+                            "🌆 *Вечерний прогноз погоды*".to_string()
+                        };
+                        
+                        format!("{}\n\n🌦 *Погода в {}*\n\n{}", 
+                            greeting, 
+                            escape_markdown_v2(city), 
+                            escape_markdown_v2(&weather_text))
+                    };
                     
                     // Отправляем сообщение
                     if let Err(e) = bot.send_message(ChatId(user.user_id), message)

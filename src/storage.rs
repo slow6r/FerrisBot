@@ -4,12 +4,16 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::io::ErrorKind;
 use log::error;
+use std::time::Duration;
+use std::thread::sleep;
+use log::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSettings {
     pub user_id: i64,
     pub city: Option<String>,
     pub notification_time: Option<String>,
+    pub cute_mode: bool, // Флаг указывающий использует ли пользователь "милый режим"
 }
 
 #[derive(Clone)]

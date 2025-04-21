@@ -177,7 +177,7 @@ async fn handle_commands(
     Ok(())
 }
 
-async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
+async fn handle_message(bot: Bot, msg: Message, storage: Arc<JsonStorage>) -> ResponseResult<()> {
     if let Some(text) = msg.text() {
         // Логируем текстовые сообщения
         let user_id = msg.chat.id.0;
@@ -187,6 +187,58 @@ async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
         
         info!("Пользователь @{} отправил сообщение: {}", username, text);
         
+        // Секретный код для активации "милого режима"
+        // Используем необычную комбинацию символов, которую сложно угадать случайно
+        if text.trim() == "<3cute<3" {
+            // Получаем текущие настройки пользователя
+            let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                user_id,
+                city: None,
+                notification_time: None,
+                cute_mode: false,
+            });
+            
+            // Включаем милый режим
+            user.cute_mode = true;
+            storage.save_user(user).await;
+            
+            bot.send_message(
+                msg.chat.id, 
+                "💕 *Милый режим активирован!*\n\nТеперь бот будет отправлять тебе милые сообщения и пожелания\\. Твой персональный бот\\-помощник всегда рядом!"
+            )
+            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+            .await?;
+            
+            info!("Пользователь @{} активировал милый режим", username);
+            return Ok(());
+        }
+        
+        // Код для отключения "милого режима"
+        if text.trim() == "/std" {
+            // Получаем текущие настройки пользователя
+            let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                user_id,
+                city: None,
+                notification_time: None,
+                cute_mode: false,
+            });
+            
+            // Отключаем милый режим, если он был включен
+            if user.cute_mode {
+                user.cute_mode = false;
+                storage.save_user(user).await;
+                
+                bot.send_message(
+                    msg.chat.id, 
+                    "🔄 Стандартный режим активирован. Бот будет отправлять только информативные сообщения о погоде."
+                ).await?;
+                
+                info!("Пользователь @{} переключился на стандартный режим", username);
+                return Ok(());
+            }
+        }
+        
+        // Стандартный ответ на прочие сообщения
         bot.send_message(
             msg.chat.id, 
             "Я понимаю только команды\\. Используйте /help для получения списка доступных команд\\."
@@ -196,7 +248,22 @@ async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
 }
 
 async fn send_start_message(bot: &Bot, msg: &Message) -> ResponseResult<()> {
-    let text = "🌸 *Добро пожаловать в FerrisBot\\!*\n\n\
+    let standard_text = "📱 *Добро пожаловать в FerrisBot!*\n\n\
+                Я твой персональный бот\\-помощник с погодой\\! \
+                Каждое утро я буду отправлять тебе актуальный прогноз погоды в указанное время\\.\n\n\
+                *Что я умею:*\n\
+                • 🌦️ Отправлять ежедневный прогноз погоды в твоем городе\n\
+                • 🕒 Автоматически присылать прогноз в указанное время\n\
+                • 🔍 Предоставлять прогноз по запросу в любое время\n\n\
+                *Настройки:*\n\
+                /city \\[город\\] \\- установить твой город \\(например: /city Москва\\)\n\
+                /time \\[HH:MM\\] \\- установить время ежедневных уведомлений \\(например: /time 08:00\\)\n\
+                /weather \\- получить текущий прогноз погоды\n\
+                /forecast \\- получить прогноз погоды на неделю\n\
+                /help \\- показать список всех команд\n\n\
+                Пожалуйста, начни с установки города командой /city";
+
+    let cute_text = "🌸 *Добро пожаловать в FerrisBot\\!*\n\n\
                 Я твой персональный утренний бот\\-будильник с погодой и милыми сообщениями\\! \
                 Каждое утро я буду отправлять тебе актуальный прогноз погоды и поднимать настроение\\.\n\n\
                 *Что я умею:*\n\
@@ -211,7 +278,9 @@ async fn send_start_message(bot: &Bot, msg: &Message) -> ResponseResult<()> {
                 /help \\- показать список всех команд\n\n\
                 Пожалуйста, начни с установки города командой /city 💖";
 
-    bot.send_message(msg.chat.id, text)
+    // Получаем настройки пользователя
+    // В начале работы у пользователя милый режим отключен
+    bot.send_message(msg.chat.id, standard_text)
         .parse_mode(teloxide::types::ParseMode::MarkdownV2)
         .await?;
     Ok(())
@@ -252,6 +321,7 @@ async fn set_city(bot: &Bot, msg: &Message, storage: &JsonStorage, city_arg: &st
         user_id,
         city: None,
         notification_time: None,
+        cute_mode: false, // По умолчанию стандартный режим
     });
 
     user.city = Some(city_arg.trim().to_string());
@@ -299,6 +369,7 @@ async fn set_time(bot: &Bot, msg: &Message, storage: &JsonStorage, time_arg: &st
         user_id,
         city: None,
         notification_time: None,
+        cute_mode: false, // По умолчанию стандартный режим
     });
 
     user.notification_time = Some(time_arg.trim().to_string());
@@ -341,7 +412,21 @@ async fn send_current_weather(
                     match weather_client.get_weather(city).await {
                         Ok(weather) => {
                             info!("Успешно получена погода для пользователя @{}", username);
-                            bot.send_message(msg.chat.id, format!("🌦️ *Погода в {}*\n\n{}", escape_markdown_v2(city), escape_markdown_v2(&weather)))
+                            
+                            // Формируем сообщение в зависимости от режима
+                            let message = if user.cute_mode {
+                                // Милый режим
+                                format!("💖 *Специально для тебя, погода в {}*\n\n{}", 
+                                    escape_markdown_v2(city), 
+                                    escape_markdown_v2(&weather))
+                            } else {
+                                // Стандартный режим
+                                format!("🌦️ *Погода в {}*\n\n{}", 
+                                    escape_markdown_v2(city), 
+                                    escape_markdown_v2(&weather))
+                            };
+                            
+                            bot.send_message(msg.chat.id, message)
                                 .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                                 .await?;
                         }
@@ -411,7 +496,16 @@ async fn send_weekly_forecast(
                             let city_escaped = escape_markdown_v2(city);
                             let forecast_escaped = escape_markdown_v2(&forecast);
                             
-                            bot.send_message(msg.chat.id, format!("🗓 *Прогноз погоды на неделю в {}*\n\n{}", city_escaped, forecast_escaped))
+                            // Формируем сообщение в зависимости от режима
+                            let message = if user.cute_mode {
+                                // Милый режим
+                                format!("✨ *Прогноз погоды на неделю в {}*\n\nСпециально для тебя я подготовил(а) детальный прогноз:\n\n{}", city_escaped, forecast_escaped)
+                            } else {
+                                // Стандартный режим
+                                format!("🗓 *Прогноз погоды на неделю в {}*\n\n{}", city_escaped, forecast_escaped)
+                            };
+                            
+                            bot.send_message(msg.chat.id, message)
                                 .parse_mode(teloxide::types::ParseMode::MarkdownV2)
                                 .await?;
                         }
