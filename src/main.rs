@@ -249,6 +249,43 @@ async fn handle_message(bot: Bot, msg: Message, storage: Arc<JsonStorage>) -> Re
                         .await?;
                         return Ok(());
                     }
+                } else if state == "waiting_for_city" {
+                    // Пользователь в режиме ввода города
+                    let city_input = text.trim();
+                    
+                    // Проверяем, что ввод не пустой
+                    if !city_input.is_empty() {
+                        // Город введен, сохраняем
+                        let mut updated_user = user_data.clone();
+                        updated_user.city = Some(city_input.to_string());
+                        updated_user.state = None; // Сбрасываем состояние ожидания
+                        storage.save_user(updated_user).await;
+                        
+                        let is_cute_mode = user_data.cute_mode;
+                        
+                        // Формируем сообщение об успешной установке города
+                        let message = if is_cute_mode {
+                            format!("🌆 *Город успешно установлен:* {}\n\nТеперь ты можешь:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_input))
+                        } else {
+                            format!("🌆 *Город успешно установлен:* {}\n\nВы можете:\n• Узнать текущую погоду с помощью /weather\n• Установить время для ежедневных уведомлений командой /time", escape_markdown_v2(city_input))
+                        };
+                        
+                        bot.send_message(msg.chat.id, message)
+                            .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                            .await?;
+                        
+                        info!("Пользователь @{} успешно установил город: {}", username, city_input);
+                        return Ok(());
+                    } else {
+                        // Пустой ввод города
+                        bot.send_message(
+                            msg.chat.id, 
+                            "⚠️ *Название города не может быть пустым*\n\nПожалуйста, введите корректное название населенного пункта\\."
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -702,17 +739,32 @@ async fn handle_callback_query(
             if data.starts_with("city_") {
                 if data == "city_manual" {
                     // Пользователь выбрал ручной ввод города
+                    // Устанавливаем состояние ожидания ввода города
+                    let mut user = storage.get_user(user_id).await.unwrap_or_else(|| UserSettings {
+                        user_id,
+                        city: None,
+                        notification_time: None,
+                        cute_mode: false,
+                        state: None,
+                    });
+                    
+                    user.state = Some("waiting_for_city".to_string());
+                    storage.save_user(user).await;
+                    
                     bot.answer_callback_query(q.id).await?;
                     
                     if let Some(message_id) = q.message.as_ref().map(|msg| msg.id) {
                         bot.edit_message_text(chat_id, message_id, 
-                            "✏️ Пожалуйста, введите название вашего города после команды, например:\n/city Москва"
-                        ).await?;
+                            "🏙️ *Ввод города вручную*\n\nПожалуйста, напишите название вашего города\\.\n\nПримеры: *Москва*, *Санкт\\-Петербург*, *Новосибирск*"
+                        )
+                        .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                        .await?;
                     }
                     
                     return Ok(());
                 }
                 
+                // Обрабатываем выбор города из меню
                 let city = data.replace("city_", "");
                 
                 // Получаем или создаем настройки пользователя
@@ -726,6 +778,7 @@ async fn handle_callback_query(
                 
                 let is_cute_mode = user.cute_mode;
                 user.city = Some(city.clone());
+                user.state = None; // Сбрасываем состояние, если оно было
                 storage.save_user(user).await;
                 
                 // Формируем сообщение
@@ -822,7 +875,7 @@ fn get_city_keyboard() -> InlineKeyboardMarkup {
     
     let cities = [
         "Москва", "Санкт-Петербург", "Новосибирск", "Екатеринбург", 
-        "Казань", "Нижний Новгород", "Челябинск", "Самара", 
+        "Тюмень", "Нижний Новгород", "Челябинск", "Самара", 
         "Омск", "Ростов-на-Дону", "Уфа", "Красноярск", 
         "Воронеж", "Пермь", "Волгоград"
     ];
