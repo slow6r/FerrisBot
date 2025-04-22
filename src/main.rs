@@ -6,6 +6,8 @@ use log::{info, error};
 use teloxide::utils::command::BotCommands;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use teloxide::types::CallbackQuery;
+use std::time::Duration;
+use std::thread::sleep;
 
 mod weather;
 mod storage;
@@ -74,10 +76,37 @@ async fn main() {
     let bot = Bot::new(bot_token);
     
     // Удаляем webhook перед запуском бота, чтобы избежать конфликта с getUpdates
-    if let Err(e) = bot.delete_webhook().await {
-        error!("Ошибка при удалении webhook: {}", e);
+    let mut webhook_deleted = false;
+    let max_attempts = 3;
+    let mut attempt = 0;
+    
+    while !webhook_deleted && attempt < max_attempts {
+        attempt += 1;
+        info!("Попытка {} из {}: удаление webhook", attempt, max_attempts);
+        
+        match bot.delete_webhook().await {
+            Ok(_) => {
+                info!("Webhook успешно удален");
+                webhook_deleted = true;
+            }
+            Err(e) => {
+                error!("Ошибка при удалении webhook (попытка {}/{}): {}", attempt, max_attempts, e);
+                if attempt < max_attempts {
+                    info!("Ожидание перед следующей попыткой...");
+                    sleep(Duration::from_secs(2));
+                } else {
+                    error!("Достигнуто максимальное количество попыток удаления webhook");
+                }
+            }
+        }
+    }
+    
+    if !webhook_deleted {
+        error!("Не удалось удалить webhook после нескольких попыток. Бот может не работать корректно!");
     } else {
-        info!("Webhook успешно удален");
+        // Добавляем небольшую задержку после успешного удаления webhook
+        info!("Ожидание 2 секунды после удаления webhook перед запуском бота...");
+        sleep(Duration::from_secs(2));
     }
     
     let weather_client = weather::WeatherClient::new(weather_api_key.clone());
