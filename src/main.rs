@@ -8,6 +8,7 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use teloxide::types::CallbackQuery;
 use std::time::Duration;
 use std::thread::sleep;
+use tokio::time;
 
 mod weather;
 mod storage;
@@ -51,6 +52,22 @@ fn escape_markdown_v2(text: &str) -> String {
     }
     
     result
+}
+
+// Новая функция для периодического удаления webhook
+async fn start_webhook_cleaner(bot: Bot) {
+    info!("Запуск планировщика периодической очистки webhook");
+    let mut interval = time::interval(Duration::from_secs(60)); // Интервал 1 минута
+    
+    loop {
+        interval.tick().await;
+        info!("Выполняю периодическую очистку webhook...");
+        
+        match bot.delete_webhook().await {
+            Ok(_) => info!("Webhook успешно удален по расписанию"),
+            Err(e) => error!("Ошибка при периодическом удалении webhook: {}", e),
+        }
+    }
 }
 
 #[tokio::main]
@@ -157,11 +174,15 @@ async fn main() {
         weather_client.clone()
     );
     info!("Планировщик уведомлений запущен");
+    
+    // Планировщик очистки webhook
+    let webhook_cleaner_task = start_webhook_cleaner(bot.clone());
+    info!("Планировщик очистки webhook запущен");
 
     // Указываем зависимости для обработчика
     let handler_dependencies = dptree::deps![bot.clone(), storage_for_handler, weather_client];
 
-    // Запускаем обе задачи параллельно
+    // Запускаем все задачи параллельно
     let mut dispatcher = teloxide::dispatching::Dispatcher::builder(bot, handler)
         .dependencies(handler_dependencies)
         .enable_ctrlc_handler()
@@ -176,6 +197,9 @@ async fn main() {
         }
         _ = scheduler_task => {
             error!("Планировщик уведомлений остановлен неожиданно");
+        }
+        _ = webhook_cleaner_task => {
+            error!("Планировщик очистки webhook остановлен неожиданно");
         }
     }
 }

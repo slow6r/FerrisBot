@@ -7,6 +7,7 @@ use std::collections::HashMap;
 const OPENWEATHER_URL: &str = "https://api.openweathermap.org/data/2.5/weather";
 const FORECAST_URL: &str = "https://api.openweathermap.org/data/2.5/forecast";
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct OpenWeatherResponse {
     main: MainInfo,
@@ -19,6 +20,7 @@ struct OpenWeatherResponse {
     visibility: Option<i32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MainInfo {
     temp: f32,
@@ -47,6 +49,7 @@ struct CloudsInfo {
     all: i32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SysInfo {
     country: String,
