@@ -74,10 +74,29 @@ async fn main() {
     let bot = Bot::new(bot_token);
     
     // Удаляем webhook перед запуском бота, чтобы избежать конфликта с getUpdates
-    if let Err(e) = bot.delete_webhook().await {
+    if let Err(e) = bot.delete_webhook().send().await {
         error!("Ошибка при удалении webhook: {}", e);
     } else {
         info!("Webhook успешно удален");
+    }
+    
+    // Дополнительная проверка, что webhook действительно удален
+    match bot.get_webhook_info().send().await {
+        Ok(info) => {
+            if let Some(url) = info.url {
+                if url.to_string().is_empty() {
+                    info!("Webhook отключен успешно");
+                } else {
+                    error!("Webhook всё ещё активен: {}", url);
+                    if let Err(e) = bot.delete_webhook().send().await {
+                        error!("Повторная попытка удаления webhook завершилась ошибкой: {}", e);
+                    }
+                }
+            } else {
+                info!("Webhook отключен успешно");
+            }
+        },
+        Err(e) => error!("Не удалось получить информацию о webhook: {}", e),
     }
     
     let weather_client = weather::WeatherClient::new(weather_api_key.clone());
